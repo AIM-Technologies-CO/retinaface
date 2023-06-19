@@ -182,9 +182,10 @@ def detect_faces(img_path, threshold=0.9, model = None, allow_upscaling = True):
     return resp
 
 
-def detect_batch_faces(numpy_rgb_images, threshold=0.9, model=None):
+def detect_batch_faces(img_path_list, threshold=0.9, model=None):
+    numpy_rgb_images = [cv2.cvtColor(cv2.imread(img_path), cv2.COLOR_BGR2RGB)for img_path in img_path_list]
     # ---------------------------
-
+    
     if model is None:
         model = build_model()
 
