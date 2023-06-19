@@ -51,3 +51,30 @@ def preprocess_image(img, allow_upscaling):
         im_tensor[0, :, :, i] = (img[:, :, 2 - i] / pixel_scale - pixel_means[2 - i]) / pixel_stds[2 - i]
 
     return im_tensor, img.shape[0:2], im_scale
+
+def preprocess_batch_images(batch_images):
+    images = []
+    img_scales = []
+    scales = [1980, 1024]
+    for image in batch_images:
+        img_h, img_w = image.shape[0:2]
+        scale_x = scales[0] / img_w
+        scale_y = scales[1] / img_h
+        scale = scale_x
+        if scale_y<scale_x<=1 or 1<=scale_y<scale_x or scale_y<=1<=scale_x:
+            scale = scale_y
+
+        image = cv2.resize(image, None, fx=scale, fy=scale, interpolation=cv2.INTER_LINEAR)
+
+        if scale == scale_x:
+            space = scales[1] - image.shape[0]
+            print(space, scales, image.shape)
+            image = np.concatenate((image, np.zeros((space, scales[0], 3), np.uint8)), axis=0)
+        elif scale == scale_y:
+            space = scales[0] - image.shape[1]
+            image = np.concatenate((image, np.zeros((scales[1], space, 3), np.uint8)), axis=1)
+
+        images.append(image.astype(np.float32))
+        img_scales.append(scale)
+
+    return np.asarray(images), img_scales

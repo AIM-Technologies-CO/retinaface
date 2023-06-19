@@ -1,3 +1,4 @@
+import math
 import warnings
 warnings.filterwarnings("ignore")
 
@@ -38,6 +39,7 @@ def build_model():
     return model
 
 def get_image(img_path):
+    print(img_path)
     if type(img_path) == str:  # Load from file path
         if not os.path.isfile(img_path):
             raise ValueError("Input image file path (", img_path, ") does not exist.")
@@ -178,6 +180,134 @@ def detect_faces(img_path, threshold=0.9, model = None, allow_upscaling = True):
         resp[label]["landmarks"]["mouth_left"] = list(landmarks[idx][4])
 
     return resp
+
+
+def detect_batch_faces(numpy_rgb_images, threshold=0.9, model=None):
+    # ---------------------------
+
+    if model is None:
+        model = build_model()
+
+    # ---------------------------
+
+    nms_threshold = 0.4
+    decay4 = 0.5
+
+    _feat_stride_fpn = [32, 16, 8]
+
+    _anchors_fpn = {
+        'stride32': np.array([[-248., -248., 263., 263.], [-120., -120., 135., 135.]], dtype=np.float32),
+        'stride16': np.array([[-56., -56., 71., 71.], [-24., -24., 39., 39.]], dtype=np.float32),
+        'stride8': np.array([[-8., -8., 23., 23.], [0., 0., 15., 15.]], dtype=np.float32)
+    }
+
+    _num_anchors = {'stride32': 2, 'stride16': 2, 'stride8': 2}
+
+    scales = [1024, 1980]
+    batch_resp = []
+    # ---------------------------
+    images, img_scales = preprocess.preprocess_batch_images(numpy_rgb_images)
+
+    batch_net_out = model(images)
+    batch_net_out = [elt.numpy() for elt in batch_net_out]
+    for i in range(batch_net_out[0].shape[0]):
+        proposals_list = []
+        scores_list = []
+        landmarks_list = []
+        sym_idx = 0
+        for s in _feat_stride_fpn:
+            scores = batch_net_out[sym_idx][i:i+1]
+            A = _num_anchors['stride%s' % s]
+            scores = scores[:, :, :, A:]
+            scores_ravel = scores.ravel()
+            order = np.where(scores_ravel >= threshold)[0]
+            scores = scores_ravel[order]
+
+            if scores.shape[0] == 0:
+                sym_idx += 3
+                continue
+
+            bbox_deltas = batch_net_out[sym_idx + 1][i:i+1]
+            height, width = bbox_deltas.shape[1], bbox_deltas.shape[2]
+            bbox_pred_len = bbox_deltas.shape[3] // A
+            bbox_deltas = bbox_deltas.reshape((-1, bbox_pred_len))
+
+            landmark_deltas = batch_net_out[sym_idx + 2][i:i+1]
+            landmark_pred_len = landmark_deltas.shape[3] // A
+            landmark_deltas = landmark_deltas.reshape((-1, 5, landmark_pred_len // 5))
+
+            anchors_fpn = _anchors_fpn['stride%s' % s]
+            proposals = []
+            landmarks = []
+            for index in order:
+                cell_y = index // (width * A)
+                cell_x = (index - cell_y * width * A) // A
+                n = index % A
+                anchor = np.array([cell_x, cell_y, cell_x, cell_y]) * s + anchors_fpn[n]
+                w = anchor[2] - anchor[0] + 1.0
+                h = anchor[3] - anchor[1] + 1.0
+                anchor_c = np.array([anchor[0] + 0.5 * (w - 1.0), anchor[1] + 0.5 * (h - 1.0)])
+                dx, dy, ln_dw, ln_dh = bbox_deltas[index]
+                pred_w = 0.5 * math.exp(ln_dw) * w
+                pred_h = 0.5 * math.exp(ln_dh) * h
+                pred_c = [anchor_c[0] + dx * w, anchor_c[1] + dy * h]
+                max_x = numpy_rgb_images[i].shape[1] * img_scales[i]
+                max_y = numpy_rgb_images[i].shape[0] * img_scales[i]
+                pred_box = np.array([max(0, pred_c[0] - pred_w), max(0, pred_c[1] - pred_h),
+                                     min(max_x, pred_c[0] + pred_w), min(max_y, pred_c[1] + pred_h)])
+                proposals.append(pred_box / img_scales[i])
+
+                landmark = landmark_deltas[index]
+                for l in range(5):
+                    landmark[l, 0] = landmark[l, 0] * w + anchor_c[0]
+                    landmark[l, 1] = landmark[l, 1] * h + anchor_c[1]
+                landmarks.append(landmark / img_scales[i])
+
+            proposals_list.append(np.array(proposals))
+            scores_list.append(scores)
+            landmarks_list.append(np.array(landmarks))
+            sym_idx += 3
+
+        if len(scores_list) == 0:
+            batch_resp.append({})
+            continue
+
+        scores = np.hstack(scores_list)
+        scores_ravel = scores.ravel()
+        order = scores_ravel.argsort()[::-1]
+
+        proposals = np.vstack(proposals_list)
+        proposals = proposals[order, :]
+        scores = scores[order]
+        landmarks = np.vstack(landmarks_list)
+        landmarks = landmarks[order].astype(np.float32)
+
+        pre_det = np.hstack((proposals, scores.reshape(-1,1))).astype(np.float32, copy=False)
+
+        # nms = cpu_nms_wrapper(nms_threshold)
+        # keep = nms(pre_det)
+        keep = postprocess.cpu_nms(pre_det, nms_threshold)
+        det = pre_det[keep, :]
+        landmarks = landmarks[keep]
+
+        resp = {}
+        for idx, face in enumerate(det):
+            label = 'face_' + str(idx + 1)
+            resp[label] = {}
+            resp[label]["score"] = face[4]
+
+            resp[label]["facial_area"] = list(face[0:4].astype(int))
+
+            resp[label]["landmarks"] = {}
+            resp[label]["landmarks"]["right_eye"] = list(landmarks[idx][0])
+            resp[label]["landmarks"]["left_eye"] = list(landmarks[idx][1])
+            resp[label]["landmarks"]["nose"] = list(landmarks[idx][2])
+            resp[label]["landmarks"]["mouth_right"] = list(landmarks[idx][3])
+            resp[label]["landmarks"]["mouth_left"] = list(landmarks[idx][4])
+
+        batch_resp.append(resp)
+    return batch_resp
+
 
 def extract_faces(img_path, threshold=0.9, model = None, align = True, allow_upscaling = True):
 
