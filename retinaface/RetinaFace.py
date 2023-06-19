@@ -39,7 +39,6 @@ def build_model():
     return model
 
 def get_image(img_path):
-    print(img_path)
     if type(img_path) == str:  # Load from file path
         if not os.path.isfile(img_path):
             raise ValueError("Input image file path (", img_path, ") does not exist.")
