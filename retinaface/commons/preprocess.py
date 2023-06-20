@@ -68,7 +68,6 @@ def preprocess_batch_images(batch_images):
 
         if scale == scale_x:
             space = scales[1] - image.shape[0]
-            print(space, scales, image.shape)
             image = np.concatenate((image, np.zeros((space, scales[0], 3), np.uint8)), axis=0)
         elif scale == scale_y:
             space = scales[0] - image.shape[1]
