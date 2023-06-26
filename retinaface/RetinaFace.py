@@ -24,7 +24,17 @@ if tf_version == 2:
     tf.get_logger().setLevel(logging.ERROR)
 
 #---------------------------
+from tensorflow.python.client import device_lib
 
+
+def get_available_gpus():
+    local_device_protos = device_lib.list_local_devices()
+    return [x.name for x in local_device_protos if x.device_type == 'GPU']
+num_gpus = len(get_available_gpus())
+
+strategy = tf.distribute.MirroredStrategy()
+print('Number of devices: {}'.format(strategy.num_replicas_in_sync))
+#---------------------------
 def build_model():
     
     global model #singleton design pattern
@@ -183,10 +193,14 @@ def detect_faces(img_path, threshold=0.9, model = None, allow_upscaling = True):
 
 def detect_batch_faces(numpy_rgb_images, threshold=0.9, model=None):
     # ---------------------------
-    
-    if model is None:
-        model = build_model()
-
+    # buiding a model inside the strategy scope
+    if num_gpus > 1:
+        with strategy.scope():
+            if model is None:
+                model = build_model()
+    else:
+        if model is None:
+            model = build_model()
     # ---------------------------
 
     nms_threshold = 0.4
